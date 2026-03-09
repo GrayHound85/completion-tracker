@@ -1,0 +1,12 @@
+{
+    "name": "Completion Tracker",
+    "description": "Tracks what weapon you already own when buying new weapons",
+    "author": "Oliver Norrie",
+    "version": "1.0",
+    "hooks": [
+        {
+            "hook_id": "lib/setups/setup",
+            "script_path": "main.lua"
+        }
+    ]
+}
