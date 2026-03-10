@@ -5,8 +5,11 @@
     "version": "1.0",
     "hooks": [
         {
-            "hook_id": "lib/setups/setup",
+            "hook_id": "lib/managers/menu/blackmarketgui",
             "script_path": "main.lua"
         }
+    ]
+    "textures": [
+        { "path": "textures/owned.png", "id": "weaponownership/owned" }
     ]
 }
