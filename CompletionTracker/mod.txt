@@ -2,7 +2,7 @@
     "name": "Completion Tracker",
     "description": "Tracks what weapon you already own when buying new weapons",
     "author": "Oliver Norrie",
-    "version": "1.0",
+    "version": "1.0.0",
     "hooks": [
         {
             "hook_id": "lib/managers/menu/blackmarketgui",
@@ -13,4 +13,12 @@
             "script_path": "menu/options.lua"
         }
     ]
+    "updates" : [
+		{
+			"identifier" : "completion_tracker",
+			"host" : {
+				"meta" : "https://github.com/GrayHound85/completion-tracker/releases/download/refs%2Fheads%2Fmaster/meta.json"
+			}
+		}
+	]
 }
