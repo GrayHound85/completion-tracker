@@ -16,7 +16,7 @@ jobs:
     - name: Hash mod and create mod meta file
       id: create_meta_file
       run: |
-         $(cat .\.github\meta.json).Replace("%HASH%", $(./.github/hash.exe "./SampleMod").Substring(17)) > ./meta.json
+         $(Get-Content .\.github\meta.json).Replace("%HASH%", $(./.github/hash.exe "./CompletionTracker").Substring(17)) > ./meta.json
     - name: Create Release and Upload Assets
       uses: softprops/action-gh-release@v2
       with:
