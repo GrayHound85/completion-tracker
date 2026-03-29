@@ -17,7 +17,7 @@
 		{
 			"identifier" : "completion_tracker",
 			"host" : {
-				"meta" : "https://github.com/GrayHound85/completion-tracker/releases/download/refs%2Fheads%2Fmaster/meta.json"
+				"meta" : "https://raw.githubusercontent.com/GrayHound85/completion-tracker/main/meta.json"
 			}
 		}
 	]
