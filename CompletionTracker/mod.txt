@@ -20,7 +20,7 @@
     ],
     "updates" : [
 		{
-			"identifier" : "completion_tracker",
+			"identifier" : "CompletionTracker",
 			"host" : {
 				"meta" : "https://raw.githubusercontent.com/GrayHound85/completion-tracker/main/meta.json"
 			}
