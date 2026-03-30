@@ -7,20 +7,16 @@
     "hooks": [
         {
             "hook_id": "lib/managers/menu/blackmarketgui",
-            "script_path": "blackmarket.lua"
+            "script_path": "lua/blackmarket.lua"
         },
         {
             "hook_id": "lib/managers/crimenetmanager",
-            "script_path": "crimenet.lua"
-        },
-        {
-            "hook_id": "lib/managers/menu/menucomponentmanager",
-            "script_path": "menu/options.lua"
+            "script_path": "lua/crimenet.lua"
         }
     ],
     "updates" : [
 		{
-			"identifier" : "CompletionTracker",
+			"identifier" : "completion_tracker",
 			"host" : {
 				"meta" : "https://raw.githubusercontent.com/GrayHound85/completion-tracker/main/meta.json"
 			}
