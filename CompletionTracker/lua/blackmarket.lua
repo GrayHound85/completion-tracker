@@ -3,7 +3,8 @@
 local OWNED_ICON_NAME = "owned_indicator"
 local OWNED_ICON_TEXTURE = "guis/textures/pd2/blackmarket/inv_mod_new"
 
-dofile(ModPath .. "config.lua")
+dofile(ModPath .. "lua/config.lua")
+CompletionTracker:Load()
 
 local function player_owns_weapon(weapon_id)
     local categories = {"primaries", "secondaries"}
@@ -30,7 +31,7 @@ Hooks:PostHook(BlackMarketGuiTabItem, "init", "OwnedDataPostHook", function(self
         local owned = wid and player_owns_weapon(wid)
 
         --- Adds icon on bottom right of weapon for all owned weapons ---
-        if wid and player_owns_weapon(wid) and OWNED_WEAPONS_CONFIG.show_icons then
+        if wid and player_owns_weapon(wid) and CompletionTracker.settings.show_icons then
             slot._data.mini_icons = slot._data.mini_icons or {}
             local already = false
             for _, icon in ipairs(slot._data.mini_icons) do
@@ -67,7 +68,7 @@ Hooks:PostHook(BlackMarketGuiTabItem, "init", "OwnedDataPostHook", function(self
         end
 
         --- Make weapon border green for owned weapons ---
-        if slot._panel and not slot._owned_border and OWNED_WEAPONS_CONFIG.show_borders then
+        if slot._panel and not slot._owned_border and CompletionTracker.settings.show_borders then
             local panel = slot._panel
             local t = 1 -- thickness
             local pad = 3
@@ -122,8 +123,6 @@ Hooks:PostHook(BlackMarketGuiTabItem, "init", "OwnedDataPostHook", function(self
         end
     end
 end)
-
-
 
 
 

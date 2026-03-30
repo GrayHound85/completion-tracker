@@ -1,5 +1,7 @@
 ---@diagnostic disable: undefined-global
-dofile(ModPath .. "config.lua")
+
+dofile(ModPath .. "lua/config.lua")
+CompletionTracker:Load()
 
 -- Completion Tracker - Colors completed heists on Crime.net
 local difficulty_order = {
@@ -54,7 +56,7 @@ local function apply_completion_color(gui_data)
 end
 
 -- Wait for CrimeNetGui to be defined before hooking
-if CrimeNetGui and CRIME_NET_CONFIG.show_completed_heists then
+if CrimeNetGui and CompletionTracker.settings.show_heist_completion then
 	Hooks:PostHook(CrimeNetGui, "add_preset_job", "CompletionTracker_AddPresetJob", function(self, preset_id, ...)
 		local gui_data = self._jobs[preset_id]
 		apply_completion_color(gui_data)
