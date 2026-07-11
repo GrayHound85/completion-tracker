@@ -20,18 +20,26 @@ local function player_owns_weapon(weapon_id)
     return false
 end
 
+local function player_owns_mask(mask_id)
+    local categories = {"masks"}
 
-Hooks:PostHook(BlackMarketGuiTabItem, "init", "OwnedDataPostHook", function(self, main_panel, data, ...)
-    if not self._data or self._data.on_create_func_name ~= "populate_buy_weapon" then
+    for _, category in ipairs(categories) do
+        local crafted = managers.blackmarket:get_crafted_category(category)
+        for _, mask in pairs(crafted) do
+            if mask.mask_id == mask_id then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+
+local function add_owned_icon(slot, data)
+    if not CompletionTracker.settings.show_icons then
         return
     end
 
-    for _, slot in ipairs(self._slots or {}) do
-        local wid = slot._data and slot._data.name
-        local owned = wid and player_owns_weapon(wid)
-
-        --- Adds icon on bottom right of weapon for all owned weapons ---
-        if wid and player_owns_weapon(wid) and CompletionTracker.settings.show_icons then
             slot._data.mini_icons = slot._data.mini_icons or {}
             local already = false
             for _, icon in ipairs(slot._data.mini_icons) do
@@ -67,8 +75,12 @@ Hooks:PostHook(BlackMarketGuiTabItem, "init", "OwnedDataPostHook", function(self
             end
         end
 
-        --- Make weapon border green for owned weapons ---
-        if slot._panel and not slot._owned_border and CompletionTracker.settings.show_borders then
+        
+local function add_owned_border(slot, owned)
+    if not CompletionTracker.settings.show_borders or not slot._panel or slot._owned_border then
+        return
+    end
+
             local panel = slot._panel
             local t = 1 -- thickness
             local pad = 3
@@ -114,15 +126,36 @@ Hooks:PostHook(BlackMarketGuiTabItem, "init", "OwnedDataPostHook", function(self
                     h = panel:h() - pad * 2
                 })
             }
-        end
-
-        if slot._owned_border then
             for _, rect in pairs(slot._owned_border) do
                 rect:set_visible(owned)
             end
         end
+
+-- Common function to handle owned items (weapons and masks)
+local function handle_owned_items(self, main_panel, data, item_type, item_id_func)
+    if not self._data or (item_type == "weapon" and self._data.on_create_func_name ~= "populate_buy_weapon")
+       or (item_type == "mask" and self._data.on_create_func_name ~= "populate_buy_mask") then
+        return
     end
+
+    for _, slot in ipairs(self._slots or {}) do
+        local item_id = slot._data and slot._data.name
+        local owned = item_id and item_id_func(item_id)
+
+        if item_id and owned then
+            add_owned_icon(slot, slot._data)
+            add_owned_border(slot, owned)
+        end
+    end
+end
+
+-- Hook for weapons
+Hooks:PostHook(BlackMarketGuiTabItem, "init", "OwnedDataPostHook", function(self, main_panel, data, ...)
+    handle_owned_items(self, main_panel, data, "weapon", player_owns_weapon)
 end)
 
-
+-- Hook for masks
+Hooks:PostHook(BlackMarketGuiTabItem, "init", "OwnedDataPostHookMasks", function(self, main_panel, data, ...)
+    handle_owned_items(self, main_panel, data, "mask", player_owns_mask)
+end)
 

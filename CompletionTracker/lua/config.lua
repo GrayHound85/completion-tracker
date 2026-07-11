@@ -4,7 +4,8 @@ CompletionTracker = CompletionTracker or {}
 CompletionTracker.defaults = {
     show_icons = false,
     show_borders = true,
-    show_heist_completion = true
+    show_heist_completion = true,
+    show_contract_completion = true
 }
 
 local config_path = SavePath .. "completion_tracker_config.json"

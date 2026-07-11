@@ -14,6 +14,10 @@
         {
             "hook_id": "lib/managers/crimenetmanager",
             "script_path": "lua/crimenet.lua"
+        },
+        {
+            "hook_id": "lib/managers/menu/contractbrokergui",
+            "script_path": "lua/contractbroker.lua"
         }
     ],
     "updates" : [
