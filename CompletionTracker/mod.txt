@@ -30,6 +30,14 @@
         {
         "hook_id": "lib/managers/menu/menunode",
         "script_path": "lua/menu.lua"
+        },
+        {
+            "hook_id": "lib/managers/menu/menucomponentmanager",
+            "script_path": "lua/completiontrackergui.lua"
+        },
+        {
+            "hook_id": "lib/setups/menusetup",
+            "script_path": "lua/menu.lua"
         }
     ],
     "updates" : [

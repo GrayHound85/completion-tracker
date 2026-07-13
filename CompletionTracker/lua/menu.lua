@@ -1,18 +1,9 @@
-
 log("==============================")
-log(" COMPLETION TRACKER MENU TEST")
+log(" COMPLETION TRACKER MENU LOADED")
 log("==============================")
 
 
 local completion_tracker_created = false
-
-MenuComponentManager.COMPONENTS = MenuComponentManager.COMPONENTS or {}
-
-MenuComponentManager.COMPONENTS.completion_tracker = function(self)
-    
-    log("CREATING COMPLETION TRACKER COMPONENT")
-
-end
 
 
 Hooks:PostHook(MenuManager, "open_menu", "CompletionTracker_CreateNode", function(self, menu_name)
@@ -22,9 +13,14 @@ Hooks:PostHook(MenuManager, "open_menu", "CompletionTracker_CreateNode", functio
     end
 
 
+    if completion_tracker_created then
+        return
+    end
+
+
     local menu = self:active_menu()
 
-    if not menu then
+    if not menu or not menu.logic then
         return
     end
 
@@ -36,33 +32,37 @@ Hooks:PostHook(MenuManager, "open_menu", "CompletionTracker_CreateNode", functio
     end
 
 
-    if completion_tracker_created then
+    local achievements_node = data._nodes.achievements
+
+
+    if not achievements_node then
+        log("[CompletionTracker] achievements node missing")
         return
     end
 
 
-    log("CREATING COMPLETION TRACKER NODE")
+    log("[CompletionTracker] Cloning achievements node")
 
 
     local node = CoreMenuNode.MenuNode:new(
     {
         name = "completion_tracker",
+
         topic_id = "menu_completion_tracker",
 
-        no_menu_wrapper = true,
-        no_item_parent = true,
+        scene_state = achievements_node._parameters.scene_state,
+        sync_state = achievements_node._parameters.sync_state,
 
-        scene_state = "crew_management",
-        sync_state = "skilltree",
-
-        menu_components = {
-            "achievement_list"
+        menu_components =
+        {
+            "completion_tracker"
         }
-    }
-    )
+    })
 
-    node._parameters.menu_components = {
-        "achievement_list"
+
+    node._parameters.menu_components =
+    {
+        "completion_tracker"
     }
 
 
@@ -76,8 +76,7 @@ Hooks:PostHook(MenuManager, "open_menu", "CompletionTracker_CreateNode", functio
     completion_tracker_created = true
 
 
-    log("COMPLETION TRACKER NODE CREATED")
-
+    log("[CompletionTracker] Node created")
 
 end)
 
@@ -92,27 +91,31 @@ Hooks:PostHook(MenuManager, "open_menu", "CompletionTracker_AddButton", function
 
     local menu = self:active_menu()
 
-    if not menu then
+    if not menu or not menu.logic then
         return
     end
 
 
     local data = menu.logic._data
 
+
     local main_node = data._nodes.main
+
 
     if not main_node then
         return
     end
 
 
-    for _, item in ipairs(main_node._items) do
+
+    for _,item in ipairs(main_node._items) do
 
         if item:parameters().name == "completion_tracker_button" then
             return
         end
 
     end
+
 
 
     local params = {
@@ -122,12 +125,14 @@ Hooks:PostHook(MenuManager, "open_menu", "CompletionTracker_AddButton", function
     }
 
 
+
     local item = main_node:create_item(nil, params)
+
 
     main_node:add_item(item)
 
 
-    log("COMPLETION TRACKER BUTTON ADDED")
+    log("[CompletionTracker] Button added")
 
 
 end)
