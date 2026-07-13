@@ -1,50 +1,47 @@
-log("==============================")
-log(" COMPLETION TRACKER COMPONENT DEBUG")
-log("==============================")
+MenuComponentCompletionTracker = MenuComponentCompletionTracker or class()
 
 
-Hooks:PostHook(MenuComponentManager, "set_active_components", "CompletionTracker_DebugComponents", function(self, components, node)
+function MenuComponentCompletionTracker:init(ws, fullscreen_ws, node)
 
-    log("==============================")
-    log("SET ACTIVE COMPONENTS DEBUG")
-    log("==============================")
+    self._ws = ws
+    self._fullscreen_ws = fullscreen_ws
+    self._node = node
 
 
-    if components then
+    self._panel = self._ws:panel():panel({
+        name = "completion_tracker_panel",
+        layer = 1000
+    })
 
-        for i,component in ipairs(components) do
 
-            log("REQUESTED COMPONENT: "..tostring(component))
+    self._text = self._panel:text({
+        name = "test_text",
+        text = "COMPLETION TRACKER WORKS!",
+        font = tweak_data.menu.pd2_large_font,
+        font_size = 50,
+        color = Color.white,
+        align = "center",
+        vertical = "center",
+        layer = 1001
+    })
 
-        end
 
+    self._text:set_center(
+        self._panel:w() / 2,
+        self._panel:h() / 2
+    )
+
+
+    log("[CompletionTracker] TEXT CREATED")
+
+end
+
+
+
+function MenuComponentCompletionTracker:close()
+
+    if alive(self._panel) then
+        self._panel:clear()
     end
 
-
-    log("------------------------------")
-
-
-    if self._active_components then
-
-        log("ACTIVE COMPONENT TABLE EXISTS")
-
-
-        for k,v in pairs(self._active_components) do
-
-            log("ACTIVE KEY: "..tostring(k))
-            log("ACTIVE VALUE: "..tostring(v))
-
-        end
-
-
-    else
-
-        log("NO _active_components TABLE")
-
-    end
-
-
-    log("==============================")
-
-
-end)
+end
