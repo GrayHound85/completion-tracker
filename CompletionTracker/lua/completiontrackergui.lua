@@ -30,6 +30,10 @@ local ids_cancel = Idstring("cancel")
 -- Row selected last time the page was open, kept until the game closes.
 local last_selected = OVERALL_ID
 
+-- Longest "what is missing" list drawn in one go. A new save can be missing
+-- well over a thousand attachments, which is slow to draw and no use to read.
+local MAX_LIST_ROWS = 200
+
 --------------------------------------------------
 -- SMALL HELPERS
 --------------------------------------------------
@@ -224,6 +228,13 @@ function CompletionTrackerGui:_rebuild()
     self._toggle_buttons = {}
     self._back_button = nil
     self._back_highlighted = false
+    self._link_rows = {}
+    self._link_hover = nil
+    self._list_back = nil
+
+    -- An open list belongs to the old numbers.
+    self._open_list = nil
+    self._summary_scroll_y = nil
 
     local ok, stats = pcall(function ()
         return CompletionStats:new():get_stats(self._include_all)
@@ -251,7 +262,7 @@ function CompletionTrackerGui:_rebuild()
 
     self:_create_header()
     self:_create_rows()
-    self:_create_detail()
+    self:_create_detail(true)
 
     self._first_build = false
 end
@@ -338,7 +349,7 @@ function CompletionTrackerGui:_create_header()
         self._back_button = nil
     end
 
-    local hint = make_text(panel, "SELECT A CATEGORY FOR THE DETAILS", "tiny", colors.text, { alpha = 0.5 })
+    local hint = make_text(panel, "SELECT A CATEGORY. BLUE LINES OPEN A LIST OF WHAT IS MISSING.", "tiny", colors.text, { alpha = 0.5 })
 
     hint:set_left(0)
     hint:set_bottom(panel:h())
@@ -499,9 +510,11 @@ function CompletionTrackerGui:_select(id, silent)
 
     self._selected = id
     last_selected = id
+    self._open_list = nil
+    self._summary_scroll_y = nil
 
     self:_refresh_rows()
-    self:_create_detail()
+    self:_create_detail(true)
 
     if not silent then
         managers.menu:post_event("menu_enter")
@@ -512,7 +525,9 @@ end
 -- RIGHT: detail panel
 --------------------------------------------------
 
-function CompletionTrackerGui:_create_detail()
+-- Draws the selected category. With a list open (self._open_list) the
+-- numbers are replaced by that list and a way back.
+function CompletionTrackerGui:_create_detail(animate)
     local panel = self._content
     local colors = tweak_data.screen_colors
     local entry = self:_entry(self._selected)
@@ -522,6 +537,10 @@ function CompletionTrackerGui:_create_detail()
     end
 
     self._scroll = nil
+    self._link_rows = {}
+    self._link_hover = nil
+    self._list_back = nil
+    self._list_back_highlighted = false
 
     if not entry then
         return
@@ -548,7 +567,7 @@ function CompletionTrackerGui:_create_detail()
     if has_progress then
         local ring_size = header_h - PAD * 2
 
-        make_ring(detail, PAD, PAD, ring_size, entry.progress, true)
+        make_ring(detail, PAD, PAD, ring_size, entry.progress, animate)
 
         local done = entry.progress >= 1
         local pct = make_text(detail, CompletionStats.fmt_pct(entry.progress), "medium", done and CompletionTracker.COMPLETED_COLOR or colors.text)
@@ -620,13 +639,47 @@ function CompletionTrackerGui:_create_detail()
         layer = 1
     })
 
-    self:_fill_lines(entry.lines or {})
+    if self._open_list then
+        self._list_back = make_text(detail, "< BACK TO SUMMARY", "small", colors.button_stage_3)
+
+        self._list_back:set_right(detail:w() - PAD)
+        self._list_back:set_bottom(header_h - 6)
+
+        self:_fill_lines(self:_list_lines(self._open_list))
+    else
+        self:_fill_lines(entry.lines or {})
+    end
 
     -- Twice on purpose, the first pass decides whether a scroll bar is
     -- needed and the second sizes the canvas for it (the contract broker
     -- does the same).
     self._scroll:update_canvas_size()
     self._scroll:update_canvas_size()
+end
+
+-- Display lines for an opened "what is missing" list.
+function CompletionTrackerGui:_list_lines(list)
+    local items = list.items or {}
+    local lines = {
+        { type = "header", text = list.title .. " (" .. CompletionStats.fmt_int(#items) .. ")" }
+    }
+
+    for index = 1, math.min(#items, MAX_LIST_ROWS) do
+        local item = items[index]
+
+        -- Lists never nest.
+        table.insert(lines, { type = "stat", label = item.label, value = item.value, progress = item.progress })
+    end
+
+    if #items > MAX_LIST_ROWS then
+        table.insert(lines, { type = "spacer" })
+        table.insert(lines, {
+            type = "note",
+            text = "And " .. CompletionStats.fmt_int(#items - MAX_LIST_ROWS) .. " more. The list is shortened to the first " .. tostring(MAX_LIST_ROWS) .. "."
+        })
+    end
+
+    return lines
 end
 
 function CompletionTrackerGui:_fill_lines(lines)
@@ -667,7 +720,15 @@ function CompletionTrackerGui:_fill_lines(lines)
             local has_progress = line.progress ~= nil
             local done = has_progress and line.progress >= 1
             local value_color = done and CompletionTracker.COMPLETED_COLOR or colors.text
-            local label = make_text(canvas, line.label or "", "small", colors.text, { x = 0, y = y, alpha = 0.85 })
+            local row_top = y
+
+            -- Blue is how the game marks text you can click.
+            local is_link = line.list ~= nil
+            local label = make_text(canvas, (line.label or "") .. (is_link and "  >" or ""), "small", is_link and colors.button_stage_3 or colors.text, {
+                x = 0,
+                y = y,
+                alpha = is_link and 1 or 0.85
+            })
             local value_right = w
             local show_pct = has_progress and not string.find(line.value or "", "%%", 1)
 
@@ -682,6 +743,14 @@ function CompletionTrackerGui:_fill_lines(lines)
             local value = make_text(canvas, line.value or "", "small", value_color, { y = y })
 
             value:set_right(value_right)
+
+            -- A long name must not run into the number beside it.
+            local label_max_w = value:left() - PAD * 2
+
+            if label:w() > label_max_w and label_max_w > 0 then
+                label:set_font_size(label:font_size() * math.max(0.6, label_max_w / label:w()))
+                fine_text(label)
+            end
 
             y = label:bottom()
 
@@ -712,6 +781,30 @@ function CompletionTrackerGui:_fill_lines(lines)
             else
                 y = y + 3
             end
+
+            if is_link then
+                local row_y = math.max(0, row_top - 2)
+                local row_h = y - row_top
+
+                -- "hit" is what the mouse is tested against, "bg" is the
+                -- hover highlight.
+                table.insert(self._link_rows, {
+                    list = line.list,
+                    label = label,
+                    hit = canvas:rect({ x = 0, y = row_y, w = w, h = row_h, alpha = 0, color = Color.white }),
+                    bg = canvas:rect({
+                        x = 0,
+                        y = row_y,
+                        w = w,
+                        h = row_h,
+                        layer = 0,
+                        alpha = 0.15,
+                        visible = false,
+                        blend_mode = "add",
+                        color = colors.button_stage_3
+                    })
+                })
+            end
         elseif line.type == "note" then
             local text = make_text(canvas, line.text or "", "tiny", colors.text, {
                 x = 0,
@@ -734,6 +827,81 @@ function CompletionTrackerGui:_fill_lines(lines)
 
     -- Keeps the last line clear of the bottom edge.
     canvas:panel({ x = 0, y = y, w = 1, h = PAD })
+end
+
+--------------------------------------------------
+-- "WHAT IS MISSING" LISTS
+--------------------------------------------------
+
+function CompletionTrackerGui:_open_missing_list(list)
+    if not list or not self._scroll then
+        return
+    end
+
+    self._summary_scroll_y = -self._scroll:canvas():y()
+    self._open_list = list
+
+    self:_create_detail(false)
+    managers.menu:post_event("menu_enter")
+end
+
+-- Back to the numbers, scrolled to where they were left.
+function CompletionTrackerGui:_close_missing_list()
+    if not self._open_list then
+        return false
+    end
+
+    local scroll_y = self._summary_scroll_y or 0
+
+    self._open_list = nil
+    self._summary_scroll_y = nil
+
+    self:_create_detail(false)
+
+    if self._scroll then
+        self._scroll:scroll_to(scroll_y)
+    end
+
+    managers.menu:post_event("menu_exit")
+
+    return true
+end
+
+-- The clickable line under the mouse, if any.
+function CompletionTrackerGui:_link_at(x, y)
+    if not self._scroll or not self._scroll:scroll_panel():inside(x, y) then
+        return nil
+    end
+
+    for _, link in ipairs(self._link_rows or {}) do
+        if alive(link.hit) and link.hit:inside(x, y) then
+            return link
+        end
+    end
+
+    return nil
+end
+
+function CompletionTrackerGui:_set_link_hover(link)
+    if link == self._link_hover then
+        return
+    end
+
+    local colors = tweak_data.screen_colors
+    local previous = self._link_hover
+
+    if previous and alive(previous.bg) then
+        previous.bg:set_visible(false)
+        previous.label:set_color(colors.button_stage_3)
+    end
+
+    self._link_hover = link
+
+    if link then
+        link.bg:set_visible(true)
+        link.label:set_color(colors.button_stage_2)
+        managers.menu:post_event("highlight")
+    end
 end
 
 --------------------------------------------------
@@ -810,6 +978,33 @@ function CompletionTrackerGui:mouse_moved(o, x, y)
     if row then
         used = true
         pointer = row.id ~= self._selected and "link" or "arrow"
+    end
+
+    local link = not used and self:_link_at(x, y) or nil
+
+    self:_set_link_hover(link)
+
+    if link then
+        used = true
+        pointer = "link"
+    end
+
+    if self._list_back and alive(self._list_back) then
+        if not used and self._list_back:inside(x, y) then
+            used = true
+            pointer = "link"
+
+            if not self._list_back_highlighted then
+                self._list_back_highlighted = true
+
+                self._list_back:set_color(colors.button_stage_2)
+                managers.menu:post_event("highlight")
+            end
+        elseif self._list_back_highlighted then
+            self._list_back_highlighted = false
+
+            self._list_back:set_color(colors.button_stage_3)
+        end
     end
 
     for _, button in ipairs(self._toggle_buttons or {}) do
@@ -899,6 +1094,20 @@ function CompletionTrackerGui:mouse_clicked(o, button, x, y)
         return true
     end
 
+    local link = self:_link_at(x, y)
+
+    if link then
+        self:_open_missing_list(link.list)
+
+        return true
+    end
+
+    if self._list_back and alive(self._list_back) and self._list_back:inside(x, y) then
+        self:_close_missing_list()
+
+        return true
+    end
+
     for _, toggle in ipairs(self._toggle_buttons or {}) do
         if toggle.text:inside(x, y) then
             self:_set_include_all(toggle.value)
@@ -968,12 +1177,17 @@ function CompletionTrackerGui:update(t, dt)
     end
 end
 
+-- Back steps out of an open list first, then out of the page.
 function CompletionTrackerGui:back_pressed()
+    if self:_close_missing_list() then
+        return true
+    end
+
     managers.menu:back(true)
 end
 
 function CompletionTrackerGui:special_btn_pressed(button)
     if button == ids_cancel then
-        managers.menu:back(true)
+        return self:back_pressed()
     end
 end

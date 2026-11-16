@@ -17,9 +17,12 @@
 --
 -- "lines" is a display list for the detail panel:
 --   { type = "header", text = "..." }
---   { type = "stat",   label = "...", value = "...", progress = 0..1 or nil }
+--   { type = "stat",   label = "...", value = "...", progress = 0..1 or nil, list = list or nil }
 --   { type = "note",   text = "..." }
 --   { type = "spacer" }
+--
+-- A stat line with a "list" can be opened on the page to see what is still
+-- missing: { title = "...", items = { stat lines } }
 
 CompletionStats = CompletionStats or class()
 
@@ -50,6 +53,9 @@ CompletionStats.HOURS = {
     mask = 0.06,
     melee = 0.1,
     throwable = 0.2,
+    -- Outfits, gloves, weapon colours and charms. Kept low on purpose, they
+    -- mostly arrive as a side effect of achievements and DLC.
+    cosmetic = 0.03,
     perk_deck = 5,
     safehouse_tier = 0.75,
     trophy = 0.5
@@ -58,6 +64,9 @@ CompletionStats.HOURS = {
 -- Infamy ranks beyond this still show on the page but add nothing to the
 -- overall percentage. 100 is the last rank with an achievement.
 CompletionStats.INFAMY_CAP = 100
+
+-- How many achievements the "closest to unlocking" section shows.
+CompletionStats.CLOSEST_ACHIEVEMENTS = 8
 
 -- Multiplier for achievements by the difficulty tag the game gives them.
 CompletionStats.ACHIEVEMENT_DIFFICULTY = {
@@ -135,12 +144,13 @@ local function ratio(have, total)
     return math.max(0, math.min(1, have / total))
 end
 
-local function count_line(label, have, total)
+local function count_line(label, have, total, list)
     return {
         type = "stat",
         label = label,
         value = fmt_int(have) .. " / " .. fmt_int(total),
-        progress = ratio(have, total)
+        progress = ratio(have, total),
+        list = list
     }
 end
 
@@ -157,6 +167,41 @@ local function note(text)
 end
 
 local SPACER = { type = "spacer" }
+
+-- Localised name for a tweak data entry, falling back to its id.
+local function name_of(item_tweak, id)
+    local name_id = item_tweak and item_tweak.name_id
+
+    if not name_id then
+        return tostring(id)
+    end
+
+    return managers.localization:text(name_id)
+end
+
+-- A "what is missing" list for a stat line, or nil when nothing is.
+local function missing_list(title, items)
+    if not items or #items == 0 then
+        return nil
+    end
+
+    table.sort(items, function (a, b)
+        local a_key = string.lower(a.label or "")
+        local b_key = string.lower(b.label or "")
+
+        if a_key ~= b_key then
+            return a_key < b_key
+        end
+
+        return (a.value or "") < (b.value or "")
+    end)
+
+    return { title = title, items = items }
+end
+
+local function missing_item(label, value, progress)
+    return { type = "stat", label = label, value = value or "", progress = progress }
+end
 
 CompletionStats.fmt_int = fmt_int
 CompletionStats.fmt_cash = fmt_cash
@@ -255,6 +300,7 @@ function CompletionStats:get_stats(include_all)
         { id = "weapon_mods",  name = "ATTACHMENTS",        func = "get_weapon_mods" },
         { id = "masks",        name = "MASKS",              func = "get_masks" },
         { id = "gear",         name = "MELEE & THROWABLES", func = "get_gear" },
+        { id = "cosmetics",    name = "COSMETICS",          func = "get_cosmetics" },
         { id = "perk_decks",   name = "PERK DECKS",         func = "get_perk_decks" },
         { id = "safehouse",    name = "SAFE HOUSE",         func = "get_safehouse" },
         { id = "trophies",     name = "TROPHIES",           func = "get_trophies" }
@@ -272,6 +318,10 @@ function CompletionStats:get_stats(include_all)
         coins_safehouse = 0,
         coins_crew = 0
     }
+
+    -- Weapon charms are found while walking the attachments and shown under
+    -- cosmetics.
+    self._charms = { total = 0, owned = 0, missing = {} }
 
     for _, gatherer in ipairs(gatherers) do
         local ok, result = pcall(self[gatherer.func], self)
@@ -406,12 +456,14 @@ function CompletionStats:get_heists()
     local tiers = CompletionTracker.difficulties
     local tier_hours = self.HOURS.heist_tier
     local completed = {}
+    local missing = {}
     local total = 0
     local never = 0
     local dlc_skipped = 0
 
     for index = 1, #tiers do
         completed[index] = 0
+        missing[index] = {}
     end
 
     for _, job in ipairs(self:_job_list()) do
@@ -426,8 +478,15 @@ function CompletionStats:get_heists()
                 never = never + 1
             end
 
-            for index = 1, highest do
-                completed[index] = completed[index] + 1
+            local name = name_of(job.job_tweak, job.job_id)
+            local best = highest == 0 and "Never completed" or "Best: " .. CompletionTracker:difficulty_name(highest)
+
+            for index = 1, #tiers do
+                if index <= highest then
+                    completed[index] = completed[index] + 1
+                else
+                    table.insert(missing[index], missing_item(name, best))
+                end
             end
         else
             dlc_skipped = dlc_skipped + 1
@@ -440,11 +499,12 @@ function CompletionStats:get_heists()
 
     for index = 1, #tiers do
         local hours = tier_hours[index] or 0
+        local name = CompletionTracker:difficulty_name(index)
 
         hours_total = hours_total + hours * total
         hours_done = hours_done + hours * completed[index]
 
-        table.insert(lines, count_line(CompletionTracker:difficulty_name(index), completed[index], total))
+        table.insert(lines, count_line(name, completed[index], total, missing_list("NOT YET COMPLETED ON " .. name, missing[index])))
     end
 
     table.insert(lines, SPACER)
@@ -523,6 +583,59 @@ end
 -- ACHIEVEMENTS
 --------------------------------------------------
 
+-- Locked achievements that track a count, nearest to done first.
+function CompletionStats:_closest_achievements(visual)
+    local candidates = {}
+
+    for id, achievement in pairs(managers.achievment.achievments or {}) do
+        local data = visual[id]
+        local progress = data and data.progress
+
+        if not achievement.awarded and type(progress) == "table" and type(progress.get) == "function" then
+            -- These read live game state, one misbehaving counter must not
+            -- cost the whole section.
+            local ok, current, max = pcall(function ()
+                local max_value = type(progress.max) == "function" and progress:max() or progress.max
+
+                return progress.get(), max_value
+            end)
+
+            if ok and type(current) == "number" and type(max) == "number" and max > 0 and current > 0 and current < max then
+                table.insert(candidates, {
+                    id = id,
+                    name = name_of(data, id),
+                    current = current,
+                    max = max,
+                    ratio = current / max
+                })
+            end
+        end
+    end
+
+    table.sort(candidates, function (a, b)
+        if a.ratio ~= b.ratio then
+            return a.ratio > b.ratio
+        end
+
+        return a.id < b.id
+    end)
+
+    local lines = {}
+
+    for index = 1, math.min(self.CLOSEST_ACHIEVEMENTS, #candidates) do
+        local candidate = candidates[index]
+
+        table.insert(lines, {
+            type = "stat",
+            label = candidate.name,
+            value = fmt_int(candidate.current) .. " / " .. fmt_int(candidate.max),
+            progress = candidate.ratio
+        })
+    end
+
+    return lines
+end
+
 function CompletionStats:get_achievements()
     local visual = tweak_data.achievement and tweak_data.achievement.visual or {}
     local buckets = {}
@@ -565,10 +678,22 @@ function CompletionStats:get_achievements()
     local lines = {
         header("ACHIEVEMENTS"),
         count_line("Unlocked", done, total),
-        value_line("Remaining", fmt_int(total - done)),
-        SPACER,
-        header("BY DIFFICULTY REQUIRED")
+        value_line("Remaining", fmt_int(total - done))
     }
+
+    local closest_ok, closest = pcall(self._closest_achievements, self, visual)
+
+    if closest_ok and #closest > 0 then
+        table.insert(lines, SPACER)
+        table.insert(lines, header("CLOSEST TO UNLOCKING"))
+
+        for _, line in ipairs(closest) do
+            table.insert(lines, line)
+        end
+    end
+
+    table.insert(lines, SPACER)
+    table.insert(lines, header("BY DIFFICULTY REQUIRED"))
 
     -- Easiest first reads better than the hardest-first lookup order.
     for index = #buckets, 1, -1 do
@@ -585,7 +710,7 @@ function CompletionStats:get_achievements()
     table.insert(lines, count_line(untagged.name, untagged.done, untagged.total))
     table.insert(lines, SPACER)
     table.insert(lines, note("The percentage here is a plain count. In the overall percentage, achievements that need a harder difficulty are worth more."))
-    table.insert(lines, note("Achievements are always counted in full, including ones tied to DLC you do not own."))
+    table.insert(lines, note("Achievements are always counted in full, including ones tied to DLC you do not own. For the full list, the game's own Achievements page can be sorted by progress."))
 
     return {
         progress = ratio(done, total),
@@ -647,9 +772,10 @@ end
 
 function CompletionStats:get_weapons()
     local owned_ids = self:_owned_weapon_ids()
+    local player_level = managers.experience:current_level() or 0
     local groups = {
-        primaries = { name = "Primary weapons", total = 0, owned = 0, cash = 0, buyable = 0, locked = 0 },
-        secondaries = { name = "Secondary weapons", total = 0, owned = 0, cash = 0, buyable = 0, locked = 0 }
+        primaries = { name = "Primary weapons", list_title = "PRIMARY WEAPONS NOT OWNED", total = 0, owned = 0, cash = 0, buyable = 0, locked = 0, missing = {} },
+        secondaries = { name = "Secondary weapons", list_title = "SECONDARY WEAPONS NOT OWNED", total = 0, owned = 0, cash = 0, buyable = 0, locked = 0, missing = {} }
     }
     local dlc_skipped = 0
 
@@ -681,13 +807,26 @@ function CompletionStats:get_weapons()
                 if owned then
                     group.owned = group.owned + 1
                 else
-                    group.cash = group.cash + (managers.money:get_weapon_price_modified(weapon_id) or 0)
+                    local price = managers.money:get_weapon_price_modified(weapon_id) or 0
+                    local status = fmt_cash(price)
+
+                    group.cash = group.cash + price
 
                     if managers.blackmarket:weapon_unlocked(weapon_id) then
                         group.buyable = group.buyable + 1
                     else
                         group.locked = group.locked + 1
+
+                        if dlc_missing then
+                            status = "DLC not owned"
+                        elseif (data.level or 0) > player_level then
+                            status = "Level " .. tostring(data.level) .. ", " .. status
+                        else
+                            status = "Locked, " .. status
+                        end
                     end
+
+                    table.insert(group.missing, missing_item(name_of(weapon_tweak, weapon_id), status))
                 end
             else
                 dlc_skipped = dlc_skipped + 1
@@ -706,7 +845,7 @@ function CompletionStats:get_weapons()
     local lines = { header("OWNED") }
 
     for _, group in ipairs({ primaries, secondaries }) do
-        table.insert(lines, count_line(group.name, group.owned, group.total))
+        table.insert(lines, count_line(group.name, group.owned, group.total, missing_list(group.list_title, group.missing)))
     end
 
     table.insert(lines, count_line("All weapons", owned, total))
@@ -753,6 +892,39 @@ local function inventory_amount(category, id)
     return amount
 end
 
+-- part id -> text saying which weapon(s) it fits.
+function CompletionStats:_part_users()
+    local users = {}
+
+    for weapon_id, data in pairs(Global.blackmarket_manager.weapons or {}) do
+        local factory = data.factory_id and tweak_data.weapon.factory[data.factory_id]
+
+        for _, part_id in ipairs(factory and factory.uses_parts or {}) do
+            local entry = users[part_id]
+
+            if not entry then
+                entry = { count = 0 }
+                users[part_id] = entry
+            end
+
+            entry.count = entry.count + 1
+            entry.weapon_id = weapon_id
+        end
+    end
+
+    local text = {}
+
+    for part_id, entry in pairs(users) do
+        if entry.count == 1 then
+            text[part_id] = name_of(tweak_data.weapon[entry.weapon_id], entry.weapon_id)
+        else
+            text[part_id] = fmt_int(entry.count) .. " weapons"
+        end
+    end
+
+    return text
+end
+
 function CompletionStats:get_weapon_mods()
     local parts = tweak_data.weapon.factory.parts
     local attached = {}
@@ -767,9 +939,15 @@ function CompletionStats:get_weapon_mods()
         end
     end
 
-    local drop = { total = 0, owned = 0 }
-    local unlockable = { total = 0, owned = 0 }
-    local charms = { total = 0, owned = 0 }
+    local users_ok, users = pcall(self._part_users, self)
+
+    if not users_ok then
+        users = {}
+    end
+
+    local drop = { total = 0, owned = 0, missing = {} }
+    local unlockable = { total = 0, owned = 0, missing = {} }
+    local charms = self._charms
     local coins = 0
     local dlc_skipped = 0
     local coin_price = tweak_data.safehouse.prices.weapon_mod or 0
@@ -783,15 +961,29 @@ function CompletionStats:get_weapon_mods()
         if obtainable and part.type ~= "bonus" then
             local owned = attached[part_id] or inventory_amount("weapon_mods", part_id) > 0
             local dlc_missing = item_dlc_missing(mod)
+            local name = name_of(mod.name_id and mod or part, part_id)
 
-            if not (self._include_all or not dlc_missing or owned) then
+            if part.type == "charm" then
+                -- Counted under cosmetics.
+                if self._include_all or not dlc_missing or owned then
+                    charms.total = charms.total + 1
+
+                    if owned then
+                        charms.owned = charms.owned + 1
+                    else
+                        table.insert(charms.missing, missing_item(name))
+                    end
+                end
+            elseif not (self._include_all or not dlc_missing or owned) then
                 dlc_skipped = dlc_skipped + 1
-            elseif part.type == "charm" then
-                charms.total = charms.total + 1
-                charms.owned = charms.owned + (owned and 1 or 0)
             elseif mod.is_a_unlockable then
                 unlockable.total = unlockable.total + 1
-                unlockable.owned = unlockable.owned + (owned and 1 or 0)
+
+                if owned then
+                    unlockable.owned = unlockable.owned + 1
+                else
+                    table.insert(unlockable.missing, missing_item(name, users[part_id]))
+                end
             else
                 drop.total = drop.total + 1
 
@@ -799,6 +991,8 @@ function CompletionStats:get_weapon_mods()
                     drop.owned = drop.owned + 1
                 else
                     coins = coins + (part.is_event_mod and event_coin_price or coin_price)
+
+                    table.insert(drop.missing, missing_item(name, users[part_id]))
                 end
             end
         end
@@ -812,8 +1006,8 @@ function CompletionStats:get_weapon_mods()
     local lines = {
         header("OBTAINED"),
         count_line("All attachments", owned, total),
-        count_line("From card drops or coins", drop.owned, drop.total),
-        count_line("From achievements, DLC and events", unlockable.owned, unlockable.total),
+        count_line("From card drops or coins", drop.owned, drop.total, missing_list("ATTACHMENTS YOU CAN BUY WITH COINS", drop.missing)),
+        count_line("From achievements, DLC and events", unlockable.owned, unlockable.total, missing_list("ATTACHMENTS LOCKED BEHIND AN UNLOCK", unlockable.missing)),
         SPACER,
         header("STILL TO GET"),
         value_line("Can be bought with coins", fmt_int(drop.total - drop.owned)),
@@ -825,14 +1019,8 @@ function CompletionStats:get_weapon_mods()
         table.insert(lines, value_line("Left out, DLC not owned", fmt_int(dlc_skipped)))
     end
 
-    if charms.total > 0 then
-        table.insert(lines, SPACER)
-        table.insert(lines, header("NOT COUNTED"))
-        table.insert(lines, count_line("Weapon charms", charms.owned, charms.total))
-    end
-
     table.insert(lines, SPACER)
-    table.insert(lines, note("An attachment counts as obtained if you have one in your inventory or fitted to a weapon. Cash to fit attachments is not included."))
+    table.insert(lines, note("An attachment counts as obtained if you have one in your inventory or fitted to a weapon. Cash to fit attachments is not included. Weapon charms are under Cosmetics."))
 
     return {
         progress = ratio(owned, total),
@@ -860,6 +1048,7 @@ function CompletionStats:get_masks()
     local owned_count = 0
     local in_stash = 0
     local dlc_skipped = 0
+    local missing = {}
 
     for mask_id, mask in pairs(tweak_data.blackmarket.masks or {}) do
         if (mask.pc or mask.pcs) and not mask.inaccessible then
@@ -873,6 +1062,8 @@ function CompletionStats:get_masks()
 
                 if owned then
                     owned_count = owned_count + 1
+                else
+                    table.insert(missing, missing_item(name_of(mask, mask_id)))
                 end
 
                 if stash and not crafted[mask_id] then
@@ -886,7 +1077,7 @@ function CompletionStats:get_masks()
 
     local lines = {
         header("OBTAINED"),
-        count_line("Masks", owned_count, total),
+        count_line("Masks", owned_count, total, missing_list("MASKS NOT YET OBTAINED", missing)),
         value_line("Remaining", fmt_int(total - owned_count)),
         value_line("In your stash, not yet crafted", fmt_int(in_stash))
     }
@@ -908,52 +1099,59 @@ function CompletionStats:get_masks()
 end
 
 --------------------------------------------------
--- MELEE & THROWABLES
+-- UNLOCK TABLES (melee, throwables, outfits, gloves)
 --------------------------------------------------
 
+-- Counts a Global.blackmarket_manager table whose entries carry "unlocked".
+-- Returns { total, owned, dlc_skipped, missing }.
 function CompletionStats:_count_unlockables(global_items, tweak_items, filter)
-    local total = 0
-    local unlocked = 0
-    local dlc_skipped = 0
+    local result = { total = 0, owned = 0, dlc_skipped = 0, missing = {} }
 
     for id, data in pairs(global_items or {}) do
         local item_tweak = tweak_items and tweak_items[id]
 
         if item_tweak and (not filter or filter(item_tweak, data)) then
             local owned = data.unlocked and true or false
+            local dlc_missing = item_dlc_missing(item_tweak)
 
-            if self._include_all or not item_dlc_missing(item_tweak) or owned then
-                total = total + 1
+            if self._include_all or not dlc_missing or owned then
+                result.total = result.total + 1
 
                 if owned then
-                    unlocked = unlocked + 1
+                    result.owned = result.owned + 1
+                else
+                    table.insert(result.missing, missing_item(name_of(item_tweak, id), dlc_missing and "DLC not owned" or ""))
                 end
             else
-                dlc_skipped = dlc_skipped + 1
+                result.dlc_skipped = result.dlc_skipped + 1
             end
         end
     end
 
-    return total, unlocked, dlc_skipped
+    return result
 end
+
+--------------------------------------------------
+-- MELEE & THROWABLES
+--------------------------------------------------
 
 function CompletionStats:get_gear()
     local blackmarket = Global.blackmarket_manager
-    local melee_total, melee_unlocked, melee_skipped = self:_count_unlockables(blackmarket.melee_weapons, tweak_data.blackmarket.melee_weapons)
+    local melee = self:_count_unlockables(blackmarket.melee_weapons, tweak_data.blackmarket.melee_weapons)
 
     -- Perk deck abilities live in the same table as throwables, they are
     -- part of the perk decks rather than something to unlock here.
-    local throw_total, throw_unlocked, throw_skipped = self:_count_unlockables(blackmarket.grenades, tweak_data.blackmarket.projectiles, function (item_tweak, data)
+    local throwables = self:_count_unlockables(blackmarket.grenades, tweak_data.blackmarket.projectiles, function (item_tweak, data)
         return item_tweak.throwable and not data.ability
     end)
 
-    local total = melee_total + throw_total
-    local unlocked = melee_unlocked + throw_unlocked
-    local dlc_skipped = melee_skipped + throw_skipped
+    local total = melee.total + throwables.total
+    local owned = melee.owned + throwables.owned
+    local dlc_skipped = melee.dlc_skipped + throwables.dlc_skipped
     local lines = {
         header("UNLOCKED"),
-        count_line("Melee weapons", melee_unlocked, melee_total),
-        count_line("Throwables", throw_unlocked, throw_total)
+        count_line("Melee weapons", melee.owned, melee.total, missing_list("MELEE WEAPONS STILL LOCKED", melee.missing)),
+        count_line("Throwables", throwables.owned, throwables.total, missing_list("THROWABLES STILL LOCKED", throwables.missing))
     }
 
     if not self._include_all and dlc_skipped > 0 then
@@ -961,10 +1159,88 @@ function CompletionStats:get_gear()
     end
 
     return {
-        progress = ratio(unlocked, total),
-        summary = fmt_int(unlocked) .. " / " .. fmt_int(total),
-        hours_total = melee_total * self.HOURS.melee + throw_total * self.HOURS.throwable,
-        hours_done = melee_unlocked * self.HOURS.melee + throw_unlocked * self.HOURS.throwable,
+        progress = ratio(owned, total),
+        summary = fmt_int(owned) .. " / " .. fmt_int(total),
+        hours_total = melee.total * self.HOURS.melee + throwables.total * self.HOURS.throwable,
+        hours_done = melee.owned * self.HOURS.melee + throwables.owned * self.HOURS.throwable,
+        lines = lines
+    }
+end
+
+--------------------------------------------------
+-- COSMETICS
+--------------------------------------------------
+
+-- Weapon colours are stored as inventory items rather than unlock flags.
+function CompletionStats:_count_weapon_colors()
+    local result = { total = 0, owned = 0, dlc_skipped = 0, missing = {} }
+    local skins = tweak_data.blackmarket.weapon_skins or {}
+
+    for _, id in ipairs(tweak_data.blackmarket.weapon_colors or {}) do
+        local color = skins[id]
+
+        if color then
+            local dlc = color.dlc or managers.dlc:global_value_to_dlc(color.global_value)
+            local gv_tweak = tweak_data.lootdrop.global_values[color.global_value or dlc or "normal"]
+            local owned = inventory_amount("weapon_skins", id) > 0
+            local dlc_missing = paid_dlc_missing(dlc)
+
+            if gv_tweak and gv_tweak.hide_unavailable and not owned then
+                -- The game hides these until you have them.
+            elseif self._include_all or not dlc_missing or owned then
+                result.total = result.total + 1
+
+                if owned then
+                    result.owned = result.owned + 1
+                else
+                    table.insert(result.missing, missing_item(name_of(color, id), dlc_missing and "DLC not owned" or ""))
+                end
+            else
+                result.dlc_skipped = result.dlc_skipped + 1
+            end
+        end
+    end
+
+    return result
+end
+
+function CompletionStats:get_cosmetics()
+    local blackmarket = Global.blackmarket_manager
+
+    -- The default outfit and gloves are always there, they are not something
+    -- to collect.
+    local function collectable(item_tweak)
+        return not item_tweak.unlocked
+    end
+
+    local outfits = self:_count_unlockables(blackmarket.player_styles, tweak_data.blackmarket.player_styles, collectable)
+    local gloves = self:_count_unlockables(blackmarket.gloves, tweak_data.blackmarket.gloves, collectable)
+    local colors = self:_count_weapon_colors()
+    local charms = self._charms
+
+    local total = outfits.total + gloves.total + colors.total + charms.total
+    local owned = outfits.owned + gloves.owned + colors.owned + charms.owned
+    local dlc_skipped = outfits.dlc_skipped + gloves.dlc_skipped + colors.dlc_skipped
+    local lines = {
+        header("UNLOCKED"),
+        count_line("Outfits", outfits.owned, outfits.total, missing_list("OUTFITS STILL LOCKED", outfits.missing)),
+        count_line("Gloves", gloves.owned, gloves.total, missing_list("GLOVES STILL LOCKED", gloves.missing)),
+        count_line("Weapon colours", colors.owned, colors.total, missing_list("WEAPON COLOURS STILL LOCKED", colors.missing)),
+        count_line("Weapon charms", charms.owned, charms.total, missing_list("WEAPON CHARMS STILL LOCKED", charms.missing))
+    }
+
+    if not self._include_all and dlc_skipped > 0 then
+        table.insert(lines, value_line("Left out, DLC not owned", fmt_int(dlc_skipped)))
+    end
+
+    table.insert(lines, SPACER)
+    table.insert(lines, note("Weapon skins and armour skins from safes are not counted, those are Steam inventory items rather than something to unlock. Cosmetics carry very little weight in the overall percentage."))
+
+    return {
+        progress = ratio(owned, total),
+        summary = fmt_int(owned) .. " / " .. fmt_int(total),
+        hours_total = total * self.HOURS.cosmetic,
+        hours_done = owned * self.HOURS.cosmetic,
         lines = lines
     }
 end
@@ -1063,27 +1339,41 @@ end
 function CompletionStats:get_safehouse()
     local prices = tweak_data.safehouse.prices.rooms
     local rooms = Global.custom_safehouse_manager and Global.custom_safehouse_manager.rooms or {}
+    local room_tweaks = {}
     local room_count = 0
     local rooms_maxed = 0
     local tiers_total = 0
     local tiers_done = 0
     local coins = 0
+    local missing = {}
+
+    for _, room_tweak in ipairs(tweak_data.safehouse.rooms or {}) do
+        room_tweaks[room_tweak.room_id] = room_tweak
+    end
 
     for room_id, room in pairs(rooms) do
         local highest = managers.custom_safehouse:get_highest_tier_unlocked(room_id) or room.tier_start or 1
         local tier_max = room.tier_max or #prices
         local tier_start = room.tier_start or 1
+        local room_coins = 0
 
         room_count = room_count + 1
         tiers_total = tiers_total + math.max(0, tier_max - tier_start)
         tiers_done = tiers_done + math.max(0, math.min(highest, tier_max) - tier_start)
 
-        if highest >= tier_max then
-            rooms_maxed = rooms_maxed + 1
+        for tier = highest + 1, tier_max do
+            room_coins = room_coins + (prices[tier] or 0)
         end
 
-        for tier = highest + 1, tier_max do
-            coins = coins + (prices[tier] or 0)
+        coins = coins + room_coins
+
+        if highest >= tier_max then
+            rooms_maxed = rooms_maxed + 1
+        else
+            local room_tweak = room_tweaks[room_id]
+            local name = room_tweak and managers.localization:text(room_tweak.title_id or room_tweak.name_id or room_id) or tostring(room_id)
+
+            table.insert(missing, missing_item(name, "Tier " .. tostring(highest) .. " / " .. tostring(tier_max) .. ", " .. fmt_int(room_coins) .. " coins"))
         end
     end
 
@@ -1091,7 +1381,7 @@ function CompletionStats:get_safehouse()
 
     local lines = {
         header("ROOMS"),
-        count_line("Rooms fully upgraded", rooms_maxed, room_count),
+        count_line("Rooms fully upgraded", rooms_maxed, room_count, missing_list("ROOMS NOT FULLY UPGRADED", missing)),
         count_line("Room upgrades bought", tiers_done, tiers_total),
         SPACER,
         header("STILL TO BUY"),
@@ -1115,18 +1405,38 @@ end
 function CompletionStats:get_trophies()
     local total = 0
     local done = 0
+    local missing = {}
 
     for _, trophy in pairs(managers.custom_safehouse:trophies() or {}) do
-        total = total + 1
+        -- The game's own trophy list leaves these out.
+        if not trophy.hidden_in_list then
+            total = total + 1
 
-        if trophy.completed then
-            done = done + 1
+            if trophy.completed then
+                done = done + 1
+            else
+                local current = 0
+                local max = 0
+
+                for _, objective in ipairs(trophy.objectives or {}) do
+                    local objective_max = objective.max_progress or 1
+
+                    max = max + objective_max
+                    current = current + math.min(objective.completed and objective_max or objective.progress or 0, objective_max)
+                end
+
+                -- Secret trophies stay secret until earned.
+                local name = trophy.secret and "???" or name_of(trophy, trophy.id)
+                local counted = max > 1
+
+                table.insert(missing, missing_item(name, counted and fmt_int(current) .. " / " .. fmt_int(max) or "", counted and ratio(current, max) or nil))
+            end
         end
     end
 
     local lines = {
         header("TROPHIES"),
-        count_line("Unlocked", done, total),
+        count_line("Unlocked", done, total, missing_list("TROPHIES STILL TO EARN", missing)),
         value_line("Remaining", fmt_int(total - done))
     }
 
@@ -1173,6 +1483,7 @@ function CompletionStats:get_economy()
     local offshore = managers.money:offshore() or 0
     local cash_earned = managers.money:total_collected() or 0
     local cash_spent = managers.money:total_spent() or 0
+
     -- Coins build up in fractions, the game only ever shows whole ones.
     local coins = math.floor(managers.custom_safehouse:coins() or 0)
     local coins_earned = math.floor(managers.custom_safehouse:total_coins_earned() or 0)

@@ -6,6 +6,11 @@ dofile(ModPath .. "lua/config.lua")
 CompletionTracker:Load()
 
 local function apply_completion_color(gui_data)
+	-- Checked every time so the options page takes effect without a restart.
+	if not CompletionTracker.settings.show_heist_completion then
+		return
+	end
+
 	if not gui_data or not gui_data.job_id or not gui_data.side_panel then
 		return
 	end
@@ -31,7 +36,7 @@ local function apply_completion_color(gui_data)
 end
 
 -- Wait for CrimeNetGui to be defined before hooking
-if CrimeNetGui and CompletionTracker.settings.show_heist_completion then
+if CrimeNetGui then
 	Hooks:PostHook(CrimeNetGui, "add_preset_job", "CompletionTracker_AddPresetJob", function(self, preset_id, ...)
 		local gui_data = self._jobs[preset_id]
 		apply_completion_color(gui_data)
@@ -41,6 +46,6 @@ if CrimeNetGui and CompletionTracker.settings.show_heist_completion then
 		local gui_data = self._jobs[data.id]
 		apply_completion_color(gui_data)
 	end)
-elseif not CrimeNetGui then
+else
 	log("[CompletionTracker] WARNING: CrimeNetGui not found yet!")
 end

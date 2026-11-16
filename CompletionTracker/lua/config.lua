@@ -11,6 +11,11 @@ CompletionTracker.defaults = {
     show_borders = true,
     show_heist_completion = true,
     show_contract_completion = true,
+    -- Skulls on each contract broker thumbnail for the hardest difficulty
+    -- the heist has been completed on.
+    show_broker_best = true,
+    -- Popup at the end of a heist when it sets a new hardest difficulty.
+    show_new_best_popup = true,
     -- Index into CompletionTracker.difficulties used by the contract broker
     -- selector. 8 = Death Sentence with One Down.
     broker_difficulty = 8,

@@ -6,6 +6,9 @@
 -- difficulty or a harder one, and adds the difficulty selector that chooses
 -- which difficulty that is. The last step of the selector is Death Sentence
 -- with One Down.
+--
+-- Also: a skull strip on each thumbnail for the hardest difficulty the heist
+-- has been completed on, and a "hide completed" tick box under the selector.
 
 dofile(ModPath .. "lua/config.lua")
 CompletionTracker:Load()
@@ -26,6 +29,22 @@ local RISK_ICONS = {
 
 local function selected_tier()
     return CompletionTracker.settings.broker_difficulty
+end
+
+-- "Hide completed" lives in Global: it survives going in and out of heists
+-- but is off again after a restart, so heists never stay hidden by surprise.
+local function hide_completed()
+    return Global.completion_tracker and Global.completion_tracker.hide_completed or false
+end
+
+local function set_hide_completed(value)
+    Global.completion_tracker = Global.completion_tracker or {}
+    Global.completion_tracker.hide_completed = value and true or false
+end
+
+-- Whether this broker should be leaving completed heists out right now.
+local function filter_active(gui)
+    return hide_completed() and CompletionTracker.settings.show_contract_completion and not gui._job_filter
 end
 
 --------------------------------------------------
@@ -88,6 +107,67 @@ local function color_contract_item(item)
     end
 end
 
+-- Skull strip along the bottom of the thumbnail: the hardest difficulty the
+-- heist has been completed on, shown the way the game shows difficulty.
+-- Nothing is drawn for a heist that has never been completed, and a heist
+-- only done on Normal gets the strip with no skulls lit.
+local function add_best_badge(item)
+    if not CompletionTracker.settings.show_broker_best then
+        return
+    end
+
+    if not item or not item._job_data or not item._job_data.job_id or item._ct_badge then
+        return
+    end
+
+    local image = item._image_panel
+
+    if not image or not alive(image) then
+        return
+    end
+
+    local best = CompletionTracker:highest_completed_tier(item._job_data.job_id)
+
+    if best == 0 then
+        return
+    end
+
+    local colors = tweak_data.screen_colors
+    local lit_color = CompletionTracker.difficulties[best].one_down and colors.one_down or colors.risk
+    local size = 14
+    local strip_h = size + 4
+    local badge = image:panel({
+        layer = 5,
+        x = 0,
+        y = image:h() - strip_h,
+        w = image:w(),
+        h = strip_h
+    })
+
+    badge:rect({ color = Color.black, alpha = 0.65, layer = 0 })
+
+    for index, icon in ipairs(RISK_ICONS) do
+        local texture, rect = tweak_data.hud_icons:get_icon_data(icon)
+
+        -- Skull N belongs to tier N + 1.
+        local lit = index < best
+
+        badge:bitmap({
+            texture = texture,
+            texture_rect = rect,
+            layer = 1,
+            x = 3 + (index - 1) * (size + 1),
+            y = 2,
+            w = size,
+            h = size,
+            color = lit and lit_color or Color.white,
+            alpha = lit and 1 or 0.25
+        })
+    end
+
+    item._ct_badge = badge
+end
+
 --------------------------------------------------
 -- DIFFICULTY SELECTOR
 --------------------------------------------------
@@ -137,6 +217,15 @@ local function refresh_selector(gui)
 
     selector.left:set_alpha(tier > 1 and 1 or 0.3)
     selector.right:set_alpha(tier < #CompletionTracker.difficulties and 1 or 0.3)
+
+    -- Left half of the texture is the empty box, right half the ticked one.
+    selector.hide_tick:set_texture_rect(hide_completed() and 24 or 0, 0, 24, 24)
+end
+
+-- Rebuilds the heist list, which is how the hide filter is applied.
+local function rebuild_jobs(gui)
+    gui:_setup_jobs()
+    gui:refresh()
 end
 
 local function set_tier(gui, tier)
@@ -151,13 +240,25 @@ local function set_tier(gui, tier)
 
     refresh_selector(gui)
 
-    for _, item in ipairs(gui._heist_items or {}) do
-        color_contract_item(item)
+    if filter_active(gui) then
+        -- Which heists are hidden depends on the difficulty.
+        rebuild_jobs(gui)
+    else
+        for _, item in ipairs(gui._heist_items or {}) do
+            color_contract_item(item)
+        end
     end
 
     managers.menu:post_event("menu_enter")
 
     return true
+end
+
+local function toggle_hide_completed(gui)
+    set_hide_completed(not hide_completed())
+    refresh_selector(gui)
+    rebuild_jobs(gui)
+    managers.menu:post_event("menu_enter")
 end
 
 local function create_selector(gui)
@@ -296,7 +397,30 @@ local function create_selector(gui)
         h = small_size + 2
     })
 
-    panel:set_h(one_down:bottom() + PAD)
+    -- "Hide completed" tick box, drawn with the game's own tick box.
+    local tick_size = 20
+    local hide_tick = panel:bitmap({
+        texture = "guis/textures/menu_tickbox",
+        texture_rect = { 0, 0, 24, 24 },
+        layer = 1,
+        x = PAD,
+        y = one_down:bottom() + 6,
+        w = tick_size,
+        h = tick_size
+    })
+    local hide_label = panel:text({
+        text = "HIDE COMPLETED",
+        font = small_font,
+        font_size = small_size,
+        color = colors.button_stage_3,
+        layer = 1,
+        x = hide_tick:right() + 6,
+        y = hide_tick:y()
+    })
+
+    fine_text(hide_label)
+    hide_label:set_center_y(hide_tick:center_y())
+    panel:set_h(hide_tick:bottom() + PAD)
 
     gui._ct_selector = {
         panel = panel,
@@ -306,13 +430,16 @@ local function create_selector(gui)
         name_max_w = name_max_w,
         name_font_size = medium_size,
         skulls = skulls,
-        one_down = one_down
+        one_down = one_down,
+        hide_tick = hide_tick,
+        hide_label = hide_label
     }
 
     refresh_selector(gui)
 end
 
--- What the mouse is over: "left", "right", a skull's tier, or nil.
+-- What the mouse is over: "left", "right", "hide", a skull's tier, "panel"
+-- for the background, or nil when it is not over the selector at all.
 local function selector_target(gui, x, y)
     local selector = gui._ct_selector
 
@@ -326,6 +453,10 @@ local function selector_target(gui, x, y)
 
     if selector.right:inside(x, y) then
         return "right"
+    end
+
+    if selector.hide_tick:inside(x, y) or selector.hide_label:inside(x, y) then
+        return "hide"
     end
 
     for index, skull in ipairs(selector.skulls) do
@@ -357,8 +488,9 @@ local function selector_mouse_moved(gui, x, y)
 
     selector.left:set_color(left_active and colors.button_stage_2 or colors.button_stage_3)
     selector.right:set_color(right_active and colors.button_stage_2 or colors.button_stage_3)
+    selector.hide_label:set_color(target == "hide" and colors.button_stage_2 or colors.button_stage_3)
 
-    local clickable = left_active or right_active or type(target) == "number"
+    local clickable = left_active or right_active or target == "hide" or type(target) == "number"
 
     if clickable and selector.highlighted ~= target then
         managers.menu:post_event("highlight")
@@ -384,6 +516,8 @@ local function selector_mouse_clicked(gui, x, y)
         set_tier(gui, selected_tier() - 1)
     elseif target == "right" then
         set_tier(gui, selected_tier() + 1)
+    elseif target == "hide" then
+        toggle_hide_completed(gui)
     elseif type(target) == "number" then
         set_tier(gui, target)
     end
@@ -400,6 +534,13 @@ end
 if ContractBrokerHeistItem then
     Hooks:PostHook(ContractBrokerHeistItem, "init", "CompletionTracker_ContractBroker_Init", function(self)
         color_contract_item(self)
+
+        -- A missing icon must not stop the broker from opening.
+        local ok, err = pcall(add_best_badge, self)
+
+        if not ok then
+            log("[CompletionTracker] Could not draw the best difficulty badge: " .. tostring(err))
+        end
     end)
 
     Hooks:PostHook(ContractBrokerHeistItem, "refresh", "CompletionTracker_ContractBroker_Refresh", function(self)
@@ -423,7 +564,67 @@ if ContractBrokerGui and not ContractBrokerGui._completion_tracker_hooked then
 
             self._ct_selector = nil
         end
+
+        -- Without the selector there is no tick box to turn the filter off
+        -- with, so heists must not stay hidden.
+        if not self._ct_selector and filter_active(self) then
+            set_hide_completed(false)
+            rebuild_jobs(self)
+        end
     end)
+
+    -- The broker builds its list from self._job_data, so hiding completed
+    -- heists is done by handing it a shorter list for the duration.
+    local orig_setup_jobs = ContractBrokerGui._setup_jobs
+
+    function ContractBrokerGui:_setup_jobs(...)
+        local canvas = self._panels and self._panels.canvas
+
+        if self._ct_empty_note and alive(self._ct_empty_note) and canvas then
+            canvas:remove(self._ct_empty_note)
+        end
+
+        self._ct_empty_note = nil
+
+        if not filter_active(self) then
+            return orig_setup_jobs(self, ...)
+        end
+
+        local all_jobs = self._job_data
+        local tier = selected_tier()
+        local remaining = {}
+
+        for _, job_data in ipairs(all_jobs) do
+            if not CompletionTracker:job_completed_at_or_above(job_data.job_id, tier) then
+                table.insert(remaining, job_data)
+            end
+        end
+
+        self._job_data = remaining
+
+        local ok, err = pcall(orig_setup_jobs, self, ...)
+
+        self._job_data = all_jobs
+
+        if not ok then
+            error(err, 0)
+        end
+
+        -- An empty list with no explanation looks broken.
+        if #self._heist_items == 0 and canvas then
+            self._ct_empty_note = canvas:text({
+                text = "NOTHING LEFT HERE ON " .. CompletionTracker:difficulty_name(tier),
+                font = tweak_data.menu.pd2_medium_font,
+                font_size = tweak_data.menu.pd2_medium_font_size,
+                color = CompletionTracker.COMPLETED_COLOR,
+                layer = 1,
+                x = PAD * 2,
+                y = PAD * 2
+            })
+
+            fine_text(self._ct_empty_note)
+        end
+    end
 
     local orig_mouse_moved = ContractBrokerGui.mouse_moved
 
