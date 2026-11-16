@@ -8,6 +8,10 @@
     "blt_version" : 2.0,
     "hooks": [
         {
+            "hook_id": "lib/managers/localizationmanager",
+            "script_path": "lua/localization.lua"
+        },
+        {
             "hook_id": "lib/managers/menu/blackmarketgui",
             "script_path": "lua/blackmarket.lua"
         },
@@ -20,28 +24,12 @@
             "script_path": "lua/contractbroker.lua"
         },
         {
-        "hook_id": "lib/managers/menumanager",
-        "script_path": "lua/menu.lua"
-        },
-        {
-        "hook_id": "lib/managers/menurenderer",
-        "script_path": "lua/menu.lua"
-        },
-        {
-        "hook_id": "lib/managers/menu/menunode",
-        "script_path": "lua/menu.lua"
-        },
-        {
-            "hook_id": "lib/managers/menu/menucomponentmanager",
-            "script_path": "lua/completiontrackergui.lua"
-        },
-        {
-            "hook_id": "lib/setups/menusetup",
+            "hook_id": "lib/managers/menumanager",
             "script_path": "lua/menu.lua"
         },
         {
-        "hook_id": "lib/managers/menu/menucomponentmanager",
-        "script_path": "lua/menucomponentmanager.lua"
+            "hook_id": "lib/managers/menu/menucomponentmanager",
+            "script_path": "lua/menucomponentmanager.lua"
         }
     ],
     "updates" : [

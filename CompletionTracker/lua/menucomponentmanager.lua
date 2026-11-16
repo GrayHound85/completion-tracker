@@ -1,86 +1,42 @@
-Hooks:PostHook(
-    MenuComponentManager,
-    "init",
-    "CompletionTracker_AddComponent",
-    function(self)
+---@diagnostic disable: undefined-global
 
-        log("==============================")
-        log("[CompletionTracker] MenuComponentManager init hook")
-        log("==============================")
+-- Completion Tracker - registers the stats page as a menu component, so a
+-- menu node can list "completion_tracker" in its menu_components.
 
+dofile(ModPath .. "lua/completiontrackergui.lua")
 
-        if not self._active_components then
-
-            log("[CompletionTracker] ERROR: _active_components missing")
-
-            return
-
-        end
-
-
-        self._active_components.completion_tracker =
-        {
-
-            create = callback(
-                self,
-                self,
-                "create_completion_tracker_gui"
-            ),
-
-
-            close = callback(
-                self,
-                self,
-                "close_completion_tracker_gui"
-            )
-
-        }
-
-
-        log("[CompletionTracker] Added completion_tracker component")
-
-    end
-)
-
-
-
-function MenuComponentManager:create_completion_tracker_gui()
-
-    log("[CompletionTracker] Creating GUI")
-
-
-    if self._completion_tracker_gui then
-
-        log("[CompletionTracker] GUI already exists")
+Hooks:PostHook(MenuComponentManager, "init", "CompletionTracker_AddComponent", function(self)
+    if not self._active_components then
+        log("[CompletionTracker] ERROR: _active_components missing")
 
         return
-
     end
 
+    self._active_components.completion_tracker = {
+        create = callback(self, self, "create_completion_tracker_gui"),
+        close = callback(self, self, "close_completion_tracker_gui")
+    }
+end)
 
+function MenuComponentManager:create_completion_tracker_gui(node)
+    self:close_completion_tracker_gui()
 
-    self._completion_tracker_gui =
-        MenuComponentCompletionTracker:new(
-            self._ws,
-            self._fullscreen_ws,
-            nil
-        )
+    self._completion_tracker_gui = CompletionTrackerGui:new(self._ws, self._fullscreen_ws, node)
 
+    -- Registering is what routes mouse and controller input to the page.
+    self:register_component("completion_tracker", self._completion_tracker_gui)
 end
 
-
-
 function MenuComponentManager:close_completion_tracker_gui()
-
-    log("[CompletionTracker] Closing GUI")
-
-
     if self._completion_tracker_gui then
-
         self._completion_tracker_gui:close()
 
         self._completion_tracker_gui = nil
 
+        self:unregister_component("completion_tracker")
     end
+end
 
+function MenuComponentManager:completion_tracker_gui()
+    return self._completion_tracker_gui
 end
